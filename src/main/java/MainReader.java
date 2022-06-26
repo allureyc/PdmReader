@@ -1,11 +1,16 @@
+import base.*;
+import org.apache.commons.lang3.StringUtils;
 import org.dom4j.*;
 import org.dom4j.io.SAXReader;
 import org.fusesource.jansi.Ansi;
 import org.fusesource.jansi.AnsiConsole;
+import template.PostgresqlTemplate;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.fusesource.jansi.Ansi.Color.*;
 
@@ -25,6 +30,8 @@ public class MainReader {
 
         long start = System.currentTimeMillis();
 
+        Tables tables = new Tables();
+
         SAXReader saxReader = new SAXReader();
         Document document = saxReader.read(new File(fileName));
         Element rootElement = document.getRootElement();
@@ -41,7 +48,7 @@ public class MainReader {
 
         List<Element> tableEles = new ArrayList<>();
 
-        //解析package
+        // 解析package
         Element packagesEle = model.element(new QName("Packages", cNamespace));
         if (packagesEle != null) {
             List<Element> packageEles = packagesEle.elements(new QName("Package", oNamespace));
@@ -54,7 +61,7 @@ public class MainReader {
         }
 
 
-        //直接解析table
+        // 直接解析table
         Element tablesEle = model.element(new QName("Tables", cNamespace));
         if (tablesEle != null) {
             tableEles.addAll(tablesEle.elements(new QName("Table", oNamespace)));
@@ -66,13 +73,21 @@ public class MainReader {
 
         int i = 0;
         for (Element tableElement : tableEles) {
+
+            Table table = new Table();
+
             i++;
             Element name = tableElement.element(new QName("Name", aNamespace));
             Element code = tableElement.element(new QName("Code", aNamespace));
-            System.out.println("------>" + Ansi.ansi().fg(BLUE).a("NO." + i) + Ansi.ansi().fg(RED).a(" " + name.getText() + " ") +
-                    Ansi.ansi().fg(YELLOW).a(code.getText()) + Ansi.ansi().fgDefault().a("<-------"));
+            Element comment = tableElement.element(new QName("Comment", aNamespace));
+            System.out.println("------>" + Ansi.ansi().fg(BLUE).a("NO." + i) + Ansi.ansi().fg(RED).a(" " + name.getText() + " ") + Ansi.ansi().fg(YELLOW).a(code.getText()) + Ansi.ansi().fgDefault().a("<-------"));
 
-            //解析主键
+            table.setId(i);
+            table.setTableName(name.getText());
+            table.setTableCode(code.getText());
+            table.setComment(comment == null ? "" : comment.getText());
+
+            // 解析主键
             Element primaryKeyEle = tableElement.element(new QName("PrimaryKey", cNamespace));
             List<String> pkIds = new ArrayList<>();
             if (primaryKeyEle != null) {
@@ -97,41 +112,89 @@ public class MainReader {
                 }
             }
 
-            //解析column
+            // 解析column
             List<Element> columns = tableElement.element(new QName("Columns", cNamespace)).elements(new QName("Column", oNamespace));
+
+            List<TableColumn> tableColumnsList = new ArrayList<>();
+
             for (Element columnEle : columns) {
+
+                TableColumn tableColumn = new TableColumn();
+
                 String columnId = columnEle.attribute("Id").getValue();
                 Element cname = columnEle.element(new QName("Name", aNamespace));
                 Element ccode = columnEle.element(new QName("Code", aNamespace));
                 Element cDataType = columnEle.element(new QName("DataType", aNamespace));
+
+                Element cDefaultValue = columnEle.element(new QName("DefaultValue", aNamespace));
+
                 Element cLength = columnEle.element(new QName("Length", aNamespace));
                 Element cComment = columnEle.element(new QName("Comment", aNamespace));
                 Element nullable = columnEle.element(new QName("Column.Mandatory", aNamespace));
 
-                System.out.print(getPadString(ccode.getText(), 20));
-                System.out.print(getPadString(getTextFromEle(cDataType), 15));
-                System.out.print(getPadString(getTextFromEle(cLength), 7));
+                tableColumn.setId(columnId);
+                tableColumn.setColumnName(cname.getText());
+                tableColumn.setColumnCode(ccode.getText());
+                tableColumn.setColumnLength(cLength == null ? "" : cLength.getText());
+                tableColumn.setType(cDataType == null ? "" : cDataType.getText());
+                tableColumn.setNullable(nullable == null ? "" : nullable.getText());
+                tableColumn.setDefaultValue(cDefaultValue == null ? "" : cDefaultValue.getText());
+                tableColumn.setComment(cComment == null ? "" : cComment.getText());
 
-                if (pkColumnIds.contains(columnId)) {
-                    System.out.print("√  ");
-                } else {
-                    System.out.print("   ");
-                }
-
-                if (nullable != null) {
-                    System.out.print("M  ");
-                } else {
-                    System.out.print("   ");
-                }
-
-                System.out.print(cname.getText());
-                if (cComment != null) {
-                    System.out.print("   (" + getTextFromEle(cComment).replace("\n", "  ") + ")");
-                }
-                System.out.println();
+                tableColumnsList.add(tableColumn);
+                System.out.println(tableColumn);
             }
-            System.out.println();
 
+            table.setTableColumns(tableColumnsList);
+            String primaryKeyName = StringUtils.join(tableColumnsList.stream().filter(tableColumn -> pkColumnIds.contains(tableColumn.getId())).map(TableColumn::getColumnName).collect(Collectors.toSet()), ",");
+            String primaryKeyCode = StringUtils.join(tableColumnsList.stream().filter(tableColumn -> pkColumnIds.contains(tableColumn.getId())).map(TableColumn::getColumnCode).collect(Collectors.toSet()), ",");
+
+            TablePrimaryKey primaryKey = new TablePrimaryKey(primaryKeyName, primaryKeyCode);
+            table.setPrimaryKey(primaryKey);
+
+            System.out.println(table.getPrimaryKey());
+
+            // 解析index
+            Element indexRoot = tableElement.element(new QName("Indexes", cNamespace));
+            if (indexRoot != null) {
+                List<Element> indexes = indexRoot.elements(new QName("Index", oNamespace));
+
+                List<TableIndex> tableIndexes = new ArrayList<>();
+
+                for (Element index : indexes) {
+                    String columnId = index.attribute("Id").getValue();
+                    Element cname = index.element(new QName("Name", aNamespace));
+                    Element ccode = index.element(new QName("Code", aNamespace));
+
+                    Element indexColumnsRoot = index.element(new QName("IndexColumns", cNamespace));
+                    if (indexColumnsRoot != null) {
+
+                        List<Element> oIndexColumns = indexColumnsRoot.elements(new QName("IndexColumn", oNamespace));
+
+                        List<String> indexValues = new ArrayList<>();
+                        for (Element indexColumn : oIndexColumns) {
+                            indexValues.add(indexColumn.element(new QName("Column", cNamespace)).element(new QName("Column", oNamespace)).attribute("Ref").getValue());
+                        }
+
+                        Element cComment = index.element(new QName("Comment", aNamespace));
+
+                        TableIndex tableIndex = new TableIndex();
+                        tableIndex.setIndexName(cname.getText());
+                        tableIndex.setIndexCode(ccode.getText());
+                        Set<String> indexValueName = table.getTableColumns().stream().filter(item -> indexValues.contains(item.getId())).map(TableColumn::getColumnName).collect(Collectors.toSet());
+                        Set<String> indexValueCode = table.getTableColumns().stream().map(TableColumn::getId).filter(indexValues::contains).collect(Collectors.toSet());
+                        tableIndex.setIndexValueName(StringUtils.join(indexValueName, ","));
+                        tableIndex.setIndexValueCode(StringUtils.join(indexValueCode, ","));
+
+                        tableIndexes.add(tableIndex);
+                        System.out.println(tableIndexes);
+                    }
+                }
+                table.setTableIndex(tableIndexes);
+            }
+            tables.getTables().add(table);
+            // System.out.println(table);
+            // break;
         }
 
         System.out.println("================================");
@@ -139,36 +202,10 @@ public class MainReader {
         System.out.println();
         System.out.print(Ansi.ansi().fg(YELLOW).a("说明： "));
         System.out.print(Ansi.ansi().fg(DEFAULT).a(""));
-        System.out.println("表标题分别为 列代码/类型/长度/是否为主键/是否允许为空/列可读名称及备注");
-        System.out.println("      √ 表示主键， M 表示不能为空");
+        // System.out.println(table);
         System.out.println();
-    }
 
-    static String getTextFromEle(Element element) {
-        if (element == null) {
-            return "";
-        }
-        return element.getText();
-    }
-
-    /**
-     * @see String#format(String, Object...)
-     */
-    static String getPadString(String str, int length) {
-        int size = str.length();
-        if (size < length) {
-            str += getBlank(length - size);
-            return str;
-        } else
-            return str + "  ";
-    }
-
-
-    static String getBlank(int length) {
-        StringBuilder s = new StringBuilder();
-        for (int i = 0; i < length; i++) {
-            s.append(" ");
-        }
-        return s.toString();
+        System.out.println(Ansi.ansi().fg(YELLOW).a("表： "));
+        System.out.println(PostgresqlTemplate.getTables(tables));
     }
 }
